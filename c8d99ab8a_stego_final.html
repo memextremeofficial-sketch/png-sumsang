@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Pixel Steganography</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a12;color:#ddd;font-family:sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:16px}
+h1{color:#ff6b35;font-size:22px;margin:10px 0 2px}
+.sub{color:#666;font-size:12px;margin-bottom:14px}
+.card{background:#111122;border-radius:12px;padding:16px;width:100%;max-width:480px;margin-bottom:12px;border:1px solid #2a2a44}
+.tabs{display:flex;margin-bottom:14px}
+.tab{flex:1;padding:10px;text-align:center;cursor:pointer;background:#0a0a18;border:1px solid #2a2a44;font-size:13px;color:#666}
+.tab:first-child{border-radius:6px 0 0 6px}
+.tab:last-child{border-radius:0 6px 6px 0}
+.tab.active{background:#ff6b3522;border-color:#ff6b35;color:#ff6b35;font-weight:bold}
+.panel{display:none}.panel.active{display:block}
+label{display:block;color:#888;font-size:11px;margin:10px 0 3px}
+input[type=text],textarea{width:100%;background:#0a0a18;border:1px solid #2a2a44;color:#ddd;padding:8px 10px;border-radius:6px;font-size:13px;font-family:inherit}
+textarea{min-height:80px;resize:vertical}
+.pick{border:2px dashed #2a2a44;border-radius:8px;padding:22px;text-align:center;cursor:pointer;margin:8px 0;font-size:13px;color:#888}
+.pick b{color:#ff6b35}
+.pick:active{border-color:#ff6b35}
+.preview{max-width:100%;max-height:180px;border-radius:6px;margin:8px 0;display:none}
+.dimtext{font-size:11px;color:#555;margin:4px 0}
+.btn{display:block;width:100%;padding:12px;border-radius:6px;border:none;font-size:14px;font-weight:bold;cursor:pointer;margin-top:12px;touch-action:manipulation}
+.btn-hide{background:#ff6b35;color:#000}
+.btn-hide:active{background:#ff8c55}
+.btn-dl{background:#22aa66;color:#fff;display:none;margin-top:10px;text-align:center;text-decoration:none;border-radius:6px;padding:12px;font-size:14px;font-weight:bold}
+.btn-reveal{background:#ff6b35;color:#000}
+.btn-reveal:active{background:#ff8c55}
+.msg{display:none;margin-top:12px;padding:12px;border-radius:8px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.msg.ok{background:#0a2a1a;border:1px solid #22aa66;color:#44dd88;display:block}
+.msg.err{background:#2a0a0a;border:1px solid #aa2222;color:#ff6666;display:block}
+</style>
+</head>
+<body>
+<h1>Pixel Steganography</h1>
+<p class="sub">Hide secret text inside images</p>
+
+<div class="card">
+<div class="tabs">
+  <div class="tab active" onclick="tab('hide',this)">Hide text</div>
+  <div class="tab"        onclick="tab('reveal',this)">Reveal text</div>
+</div>
+
+<!-- HIDE -->
+<div id="pHide" class="panel active">
+  <div class="pick" onclick="document.getElementById('hf').click()">
+    Tap to pick an image<br><b>browse</b>
+  </div>
+  <input type="file" id="hf" accept="image/*" style="display:none">
+  <img id="hPrev" class="preview">
+  <p class="dimtext" id="hInfo"></p>
+
+  <label>Password</label>
+  <input type="text" id="hPass" placeholder="Choose a password" autocomplete="off">
+
+  <label>Secret message</label>
+  <textarea id="hMsg" placeholder="Type the text you want to hide..."></textarea>
+  <p class="dimtext" id="hCap"></p>
+
+  <button class="btn btn-hide" onclick="doHide()">Hide &amp; get download link</button>
+
+  <div id="hMsg2" class="msg"></div>
+
+  <!-- Download link — works in Chrome, Samsung Internet, Firefox mobile -->
+  <a id="dlBtn" class="btn-dl" download="secret_image.png">⬇ Download Secret Image</a>
+  <p class="dimtext" id="dlHint" style="display:none;color:#aaa;margin-top:6px">
+    Save this PNG. To decode it later, go to the "Reveal text" tab and upload it.
+    ⚠ Send as a file/document (not as a WhatsApp photo — that compresses and destroys the hidden data).
+  </p>
+</div>
+
+<!-- REVEAL -->
+<div id="pReveal" class="panel">
+  <div class="pick" onclick="document.getElementById('rf').click()">
+    Tap to pick the secret image<br><b>browse</b>
+  </div>
+  <input type="file" id="rf" accept="image/*" style="display:none">
+  <img id="rPrev" class="preview">
+  <p class="dimtext" id="rInfo"></p>
+
+  <label>Password</label>
+  <input type="text" id="rPass" placeholder="Enter the password" autocomplete="off">
+
+  <button class="btn btn-reveal" onclick="doReveal()">Reveal text</button>
+  <div id="rMsg" class="msg"></div>
+</div>
+</div>
+
+<script>
+var MAGIC = 0xDEADBEEF;
+var Hpx = null, Rpx = null;
+
+// ── polyfills ──
+if (!window.TextEncoder) {
+  window.TextEncoder = function(){};
+  TextEncoder.prototype.encode = function(s) {
+    var o=[];
+    for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);if(c<128)o.push(c);else if(c<2048)o.push((c>>6)|192,(c&63)|128);else o.push((c>>12)|224,((c>>6)&63)|128,(c&63)|128);}
+    return new Uint8Array(o);
+  };
+}
+if (!window.TextDecoder) {
+  window.TextDecoder = function(){};
+  TextDecoder.prototype.decode = function(a) {
+    var s='',i=0;
+    while(i<a.length){var b=a[i];if(b<128){s+=String.fromCharCode(b);i++;}else if((b&224)===192){s+=String.fromCharCode(((b&31)<<6)|(a[i+1]&63));i+=2;}else{s+=String.fromCharCode(((b&15)<<12)|((a[i+1]&63)<<6)|(a[i+2]&63));i+=3;}}
+    return s;
+  };
+}
+
+function tab(name, el) {
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  document.getElementById('pHide').classList.toggle('active', name==='hide');
+  document.getElementById('pReveal').classList.toggle('active', name==='reveal');
+}
+
+function msg(id, text, isErr) {
+  var el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg ' + (isErr ? 'err' : 'ok');
+}
+
+function loadImg(file, onDone, onFail) {
+  var fr = new FileReader();
+  fr.onload = function(e) {
+    var im = new Image();
+    im.onload = function() {
+      try {
+        var c = document.createElement('canvas');
+        c.width  = im.naturalWidth  || im.width;
+        c.height = im.naturalHeight || im.height;
+        var ctx = c.getContext('2d');
+        ctx.drawImage(im, 0, 0);
+        onDone(ctx.getImageData(0,0,c.width,c.height), c.width, c.height, e.target.result);
+      } catch(err){ onFail(err.message); }
+    };
+    im.onerror = function(){ onFail('Cannot decode image'); };
+    im.src = e.target.result;
+  };
+  fr.onerror = function(){ onFail('Cannot read file'); };
+  fr.readAsDataURL(file);
+}
+
+// hide: load
+document.getElementById('hf').onchange = function() {
+  if (!this.files[0]) return;
+  loadImg(this.files[0], function(idata, w, h, dataUrl) {
+    Hpx = { d: idata.data, w: w, h: h };
+    document.getElementById('hPrev').src = dataUrl;
+    document.getElementById('hPrev').style.display = 'block';
+    document.getElementById('hInfo').textContent = w + '×' + h + ' px';
+    document.getElementById('hCap').textContent = 'Fits up to ~' + Math.floor(w*h*3/8-8) + ' characters';
+    document.getElementById('dlBtn').style.display = 'none';
+    document.getElementById('dlHint').style.display = 'none';
+    document.getElementById('hMsg2').className = 'msg';
+  }, function(e){ msg('hMsg2', e, true); });
+};
+
+function doHide() {
+  if (!Hpx) { msg('hMsg2','Pick an image first',true); return; }
+  var pass = document.getElementById('hPass').value;
+  var text = document.getElementById('hMsg').value;
+  if (!pass) { msg('hMsg2','Enter a password',true); return; }
+  if (!text) { msg('hMsg2','Type a message',true); return; }
+
+  try {
+    var px = new Uint8ClampedArray(Hpx.d);
+    embed(px, xorcrypt(new TextEncoder().encode(text), pass));
+
+    var c = document.createElement('canvas');
+    c.width = Hpx.w; c.height = Hpx.h;
+    c.getContext('2d').putImageData(new ImageData(px, Hpx.w, Hpx.h), 0, 0);
+
+    // quick verify
+    var out = c.getContext('2d').getImageData(0,0,Hpx.w,Hpx.h);
+    var check = new TextDecoder().decode(xorcrypt(extract(out.data), pass));
+    if (check !== text) throw new Error('Canvas verify failed on this device');
+
+    // set download link href — plain <a download> works in Chrome/Samsung Internet
+    var dataUrl = c.toDataURL('image/png');
+    var dl = document.getElementById('dlBtn');
+    dl.href = dataUrl;
+    dl.style.display = 'block';
+    document.getElementById('dlHint').style.display = 'block';
+    msg('hMsg2', '✓ Done! Tap the green button below to download.', false);
+
+  } catch(e) {
+    msg('hMsg2', 'Error: ' + e.message, true);
+  }
+}
+
+// reveal: load
+document.getElementById('rf').onchange = function() {
+  if (!this.files[0]) return;
+  loadImg(this.files[0], function(idata, w, h, dataUrl) {
+    Rpx = idata.data;
+    document.getElementById('rPrev').src = dataUrl;
+    document.getElementById('rPrev').style.display = 'block';
+    document.getElementById('rInfo').textContent = w + '×' + h + ' px';
+    document.getElementById('rMsg').className = 'msg';
+  }, function(e){ msg('rMsg', e, true); });
+};
+
+function doReveal() {
+  if (!Rpx) { msg('rMsg','Pick an image first',true); return; }
+  var pass = document.getElementById('rPass').value;
+  if (!pass) { msg('rMsg','Enter the password',true); return; }
+  try {
+    msg('rMsg', 'Message:\n\n' + new TextDecoder().decode(xorcrypt(extract(Rpx), pass)), false);
+  } catch(e) {
+    var hint = e.message.indexOf('No hidden') !== -1
+      ? 'No hidden message found.\n\nCheck:\n• Correct image? (must be the downloaded PNG, not a screenshot)\n• Correct password?\n• Was the image sent as a WhatsApp photo? (that destroys it — send as a file/document instead)'
+      : e.message;
+    msg('rMsg', hint, true);
+  }
+}
+
+// crypto — simple XOR stream
+function xorcrypt(data, pass) {
+  var k = new Uint8Array(data.length);
+  for (var i = 0; i < data.length; i++) {
+    var b = i*13+37;
+    for (var j = 0; j < pass.length; j++) { b ^= pass.charCodeAt(j)*(j+1); b=((b<<3)|(b>>5))&255; }
+    k[i] = b;
+  }
+  var out = new Uint8Array(data.length);
+  for (var i = 0; i < data.length; i++) out[i] = data[i] ^ k[i];
+  return out;
+}
+
+// LSB embed
+function embed(px, data) {
+  var need = 64 + data.length*8, have = Math.floor(px.length/4)*3;
+  if (need > have) throw new Error('Message too long for this image');
+  var bits = [];
+  function p32(v){for(var i=31;i>=0;i--)bits.push((v>>>i)&1);}
+  p32(MAGIC); p32(data.length);
+  for(var b=0;b<data.length;b++) for(var i=7;i>=0;i--) bits.push((data[b]>>>i)&1);
+  var bi=0;
+  for(var i=0;i<px.length&&bi<bits.length;i+=4)
+    for(var c=0;c<3&&bi<bits.length;c++)
+      px[i+c]=(px[i+c]&0xFE)|bits[bi++];
+}
+
+// LSB extract
+function extract(px) {
+  var bits=[];
+  for(var i=0;i<px.length;i+=4) for(var c=0;c<3;c++) bits.push(px[i+c]&1);
+  function r32(o){var v=0;for(var i=0;i<32;i++)v=(v<<1)|bits[o+i];return v>>>0;}
+  if(r32(0)!==MAGIC) throw new Error('No hidden message found');
+  var len=r32(32);
+  if(len<1||len>500000) throw new Error('Corrupted — image was probably re-compressed');
+  var d=new Uint8Array(len);
+  for(var i=0;i<len;i++){var byte_=0;for(var j=0;j<8;j++)byte_=(byte_<<1)|bits[64+i*8+j];d[i]=byte_;}
+  return d;
+}
+</script>
+</body>
+</html>
